@@ -1,0 +1,43 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    // Se o seu projeto usa um Firestore com ID de banco personalizado
+    // (em vez do banco "(default)"), troque "(default)" abaixo pelo ID
+    // exibido no Console do Firebase > Firestore Database.
+    function isActiveUser() {
+      return isSignedIn() &&
+        firestore.exists(/databases/(default)/documents/users/$(request.auth.uid)) &&
+        firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.active == true;
+    }
+    function isAcceptedImage() {
+      return request.resource.contentType.matches('image/.*');
+    }
+    function isAcceptedVideo() {
+      return request.resource.contentType in ['video/mp4', 'video/quicktime', 'video/webm'];
+    }
+
+    // Dados dos Leads/{Nº | Nome | Telefone | Data}/Imagens/{arquivo}
+    match /Dados dos Leads/{folder}/Imagens/{fileName} {
+      allow read: if isActiveUser();
+      allow write: if isActiveUser() && isAcceptedImage() && request.resource.size < 15 * 1024 * 1024;
+      allow delete: if isActiveUser();
+    }
+
+    // Dados dos Leads/{Nº | Nome | Telefone | Data}/Vídeos/{arquivo}
+    match /Dados dos Leads/{folder}/Vídeos/{fileName} {
+      allow read: if isActiveUser();
+      allow write: if isActiveUser() && isAcceptedVideo() && request.resource.size < 500 * 1024 * 1024;
+      allow delete: if isActiveUser();
+    }
+
+    // Qualquer outro caminho fica bloqueado por padrão.
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

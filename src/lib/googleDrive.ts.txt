@@ -1,0 +1,117 @@
+const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
+const SCOPES = 'https://www.googleapis.com/auth/drive.file';
+
+let tokenClient: any = null;
+
+export function initGoogleDriveAuth(callback?: (token: string) => void) {
+  if (typeof window === 'undefined' || !(window as any).google?.accounts?.oauth2) return;
+  tokenClient = (window as any).google.accounts.oauth2.initTokenClient({
+    client_id: CLIENT_ID,
+    scope: SCOPES,
+    callback: (response: any) => {
+      if (response.access_token) {
+        localStorage.setItem('gdrive_access_token', response.access_token);
+        if (callback) callback(response.access_token);
+      }
+    },
+  });
+}
+
+export function connectGoogleDrive(): Promise<string> {
+  return new Promise((resolve, reject) => {
+    try {
+      initGoogleDriveAuth((t) => resolve(t));
+      if (tokenClient) {
+        tokenClient.requestAccessToken({ prompt: 'consent' });
+      } else {
+        reject(new Error('A biblioteca do Google ainda está carregando. Tente novamente em alguns segundos.'));
+      }
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
+export function isDriveConnected(): boolean {
+  return !!localStorage.getItem('gdrive_access_token');
+}
+
+export function disconnectGoogleDrive() {
+  localStorage.removeItem('gdrive_access_token');
+}
+
+export async function getOrCreateFolder(folderName: string, parentId?: string): Promise<string> {
+  const token = localStorage.getItem('gdrive_access_token');
+  if (!token) throw new Error('Google Drive não está conectado. Conecte sua conta em Usuários.');
+
+  let q = `mimeType='application/vnd.google-apps.folder' and name='${folderName}' and trashed=false`;
+  if (parentId) q += ` and '${parentId}' in parents`;
+
+  const searchRes = await fetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const data = await searchRes.json();
+
+  if (data.files && data.files.length > 0) {
+    return data.files[0].id;
+  }
+
+  const metadata: any = {
+    name: folderName,
+    mimeType: 'application/vnd.google-apps.folder',
+  };
+  if (parentId) metadata.parents = [parentId];
+
+  const createRes = await fetch('https://www.googleapis.com/drive/v3/files', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(metadata),
+  });
+  const created = await createRes.json();
+  return created.id;
+}
+
+export async function uploadToDrive(
+  file: Blob,
+  fileName: string,
+  folderId: string
+): Promise<{ url: string; fileId: string }> {
+  const token = localStorage.getItem('gdrive_access_token');
+  if (!token) throw new Error('Google Drive desconectado.');
+
+  const metadata = {
+    name: fileName,
+    parents: [folderId],
+  };
+
+  const form = new FormData();
+  form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+  form.append('file', file);
+
+  const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    body: form,
+  });
+
+  const result = await res.json();
+  if (!res.ok) throw new Error(result.error?.message || 'Erro no upload para o Drive');
+
+  // Concede permissão de visualização do link
+  await fetch(`https://www.googleapis.com/drive/v3/files/${result.id}/permissions`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ role: 'reader', type: 'anyone' }),
+  });
+
+  return {
+    url: `https://drive.google.com/file/d/${result.id}/view?usp=drivesdk`,
+    fileId: result.id,
+  };
+}

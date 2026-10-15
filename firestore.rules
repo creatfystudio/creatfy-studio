@@ -1,0 +1,102 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------- Funções auxiliares ----------
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    function userDocExists() {
+      return exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+    function userDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+    function isActiveUser() {
+      return isSignedIn() && userDocExists() && userDoc().active == true;
+    }
+    function myLevel() {
+      return userDoc().level;
+    }
+    function isManager() {
+      return isActiveUser() && myLevel() == 'manager';
+    }
+    function isSeller() {
+      return isActiveUser() && myLevel() == 'seller';
+    }
+    function isCreator() {
+      return isActiveUser() && myLevel() == 'creator';
+    }
+    function isMasterToken() {
+      return isSignedIn() && request.auth.token.email == 'mascotfystudio@gmail.com';
+    }
+
+    // ---------- users ----------
+    match /users/{uid} {
+      allow get: if isSignedIn() && (request.auth.uid == uid || isMasterToken());
+      allow list: if isMasterToken();
+      allow create, update, delete: if isMasterToken();
+    }
+
+    // ---------- categories ----------
+    match /categories/{id} {
+      allow read: if isActiveUser();
+      allow create: if isActiveUser() && (myLevel() == 'seller' || myLevel() == 'manager')
+                    && request.resource.data.createdBy == request.auth.uid;
+      allow update, delete: if isManager() ||
+                    (isActiveUser() && resource.data.createdBy == request.auth.uid);
+    }
+
+    // ---------- orders ----------
+    match /orders/{orderId} {
+      allow read: if isManager() ||
+                   (isSeller() && resource.data.sellerId == request.auth.uid) ||
+                   isCreator();
+
+      allow create: if isManager() ||
+                     (isSeller() && request.resource.data.sellerId == request.auth.uid);
+
+      allow update: if isManager()
+        || (
+          isSeller() && resource.data.sellerId == request.auth.uid &&
+          resource.data.status == 'pending' &&
+          request.resource.data.sellerId == resource.data.sellerId &&
+          request.resource.data.folderPath == resource.data.folderPath &&
+          request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['clientName', 'clientPhone', 'value', 'category', 'videos', 'images'])
+        )
+        || (
+          isSeller() && resource.data.sellerId == request.auth.uid &&
+          resource.data.status == 'ready' &&
+          request.resource.data.status == 'delivered' &&
+          request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['status', 'statusHistory', 'deliveredAt'])
+        )
+        || (
+          isCreator() && resource.data.status in ['pending', 'production'] &&
+          request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['status', 'videos', 'startedBy', 'startedByUid', 'startedAt',
+                      'finishedBy', 'finishedByUid', 'finishedAt', 'statusHistory'])
+        );
+
+      allow delete: if isManager();
+    }
+
+    // ---------- contador de números de pedido ----------
+    match /system/counters {
+      allow get: if isActiveUser();
+      allow create, update: if isActiveUser();
+    }
+
+    // Reservado para uma futura integração com Google Drive (não usado nesta
+    // versão). Nenhum cliente pode ler ou escrever aqui.
+    match /system/driveConfig {
+      allow read, write: if false;
+    }
+    match /auditLog/{id} {
+      allow read: if isMasterToken();
+      allow write: if false;
+    }
+  }
+}
