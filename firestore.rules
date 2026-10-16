@@ -29,7 +29,7 @@ service cloud.firestore {
       return isActiveUser() && myLevel() == 'creator';
     }
     function isMasterToken() {
-      return isSignedIn() && request.auth.token.email == 'mascotfystudio@gmail.com';
+      return isSignedIn() && request.auth.token.email == 'creatfystudio@gmail.com';
     }
 
     // ---------- users ----------

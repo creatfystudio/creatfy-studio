@@ -1,5 +1,5 @@
 import { Sun, Moon, Laptop, LogOut } from 'lucide-react';
-import MascotfyLogo from './MascotfyLogo';
+import MascotfyLogo from './CreatfyLogo';
 import { useTheme } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
 import { LEVEL_LABELS } from '../types';

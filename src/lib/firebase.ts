@@ -3,8 +3,6 @@ import { getAuth, type Auth } from 'firebase/auth';
 import { getFirestore, type Firestore } from 'firebase/firestore';
 import { getStorage, type FirebaseStorage } from 'firebase/storage';
 
-// Todas as credenciais vêm de variáveis de ambiente (.env).
-// Veja .env.example e o README para instruções de configuração.
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
   authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
@@ -14,20 +12,14 @@ const firebaseConfig = {
   appId: import.meta.env.VITE_FIREBASE_APP_ID,
 };
 
-export const MASTER_EMAIL = 'mascotfystudio@gmail.com';
+// COLOQUE AQUI O E-MAIL DO GESTOR MESTRE DA CREATFY STUDIO (tudo em minúsculas):
+export const MASTER_EMAIL = 'creatfystudio@gmail.com';
 
-// App principal (sessão do usuário logado)
 export const app: FirebaseApp = getApps().length ? getApp() : initializeApp(firebaseConfig);
 export const auth: Auth = getAuth(app);
 export const db: Firestore = getFirestore(app);
 export const storage: FirebaseStorage = getStorage(app);
 
-/**
- * Retorna uma instância SECUNDÁRIA do Firebase, usada apenas para criar
- * contas de novos usuários sem derrubar a sessão do Gestor Mestre.
- * Uma nova instância "Secondary" é criada a cada chamada (ou reaproveitada
- * se já existir) para não interferir na sessão principal.
- */
 export function getSecondaryAuth(): Auth {
   const secondaryApp =
     getApps().find((a) => a.name === 'Secondary') ??
