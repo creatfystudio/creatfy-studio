@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 
 interface ModalProps {
@@ -97,6 +97,8 @@ interface ConfirmDialogProps {
   confirmLabel?: string;
   cancelLabel?: string;
   danger?: boolean;
+  /** Se informado, o botão de confirmar só fica ativo depois que o usuário digitar este texto. */
+  requireText?: string;
   onCancel: () => void;
   onConfirm: () => void | Promise<void>;
 }
@@ -107,22 +109,57 @@ export function ConfirmDialog({
   confirmLabel = 'Confirmar',
   cancelLabel = 'Cancelar',
   danger,
+  requireText,
   onCancel,
   onConfirm,
 }: ConfirmDialogProps) {
+  const [typed, setTyped] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const blocked = requireText ? typed.trim() !== requireText : false;
+
+  async function handleConfirm() {
+    if (blocked || busy) return;
+    setBusy(true);
+    try {
+      await onConfirm();
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <Modal title={title} onClose={onCancel}>
-      <p className="text-sm" style={{ marginBottom: 18 }}>{message}</p>
+      <p className="text-sm" style={{ marginBottom: 14 }}>{message}</p>
+
+      {requireText && (
+        <div className="field" style={{ marginBottom: 18 }}>
+          <label>
+            Para confirmar, digite <strong>{requireText}</strong>
+          </label>
+          <input
+            className="input"
+            autoFocus
+            value={typed}
+            onChange={(e) => setTyped(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') handleConfirm();
+            }}
+          />
+        </div>
+      )}
+
       <div className="row gap-sm" style={{ justifyContent: 'flex-end' }}>
-        <button type="button" className="btn btn-secondary" onClick={onCancel}>
+        <button type="button" className="btn btn-secondary" onClick={onCancel} disabled={busy}>
           {cancelLabel}
         </button>
         <button
           type="button"
           className={`btn ${danger ? 'btn-danger' : 'btn-primary'}`}
-          onClick={() => onConfirm()}
+          onClick={handleConfirm}
+          disabled={blocked || busy}
         >
-          {confirmLabel}
+          {busy ? 'Aguarde…' : confirmLabel}
         </button>
       </div>
     </Modal>
