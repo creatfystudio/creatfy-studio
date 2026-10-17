@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useMemo, useRef, useState, useEffect } from 'react';
 import {
   Copy,
   Download,
@@ -48,6 +48,7 @@ import ManageCategoriesModal from '../../components/ManageCategoriesModal';
 import FolderContentsModal from '../../components/FolderContentsModal';
 import EditOrderModal from '../../components/EditOrderModal';
 import StatusBadge from '../../components/StatusBadge';
+import DriveImage from '../../components/DriveImage';
 import { Modal } from '../../components/Modal';
 import { triggerBrowserDownload, uploadOrderImage } from '../../lib/storage';
 import { updateDoc, doc } from 'firebase/firestore';
@@ -60,62 +61,6 @@ function extractFileId(url: string | undefined): string | null {
   if (!url) return null;
   const match = url.match(/\/file\/d\/([a-zA-Z0-9_-]+)/) || url.match(/id=([a-zA-Z0-9_-]+)/);
   return match ? match[1] : null;
-}
-
-function DriveThumb({ url }: { url: string }) {
-  const [blobSrc, setBlobSrc] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const fileId = extractFileId(url);
-
-  useEffect(() => {
-    let active = true;
-    const token = localStorage.getItem('gdrive_access_token');
-
-    if (!fileId || !token) {
-      setLoading(false);
-      return;
-    }
-
-    fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then((res) => {
-        if (!res.ok) throw new Error('Erro');
-        return res.blob();
-      })
-      .then((blob) => {
-        if (active) {
-          setBlobSrc(URL.createObjectURL(blob));
-          setLoading(false);
-        }
-      })
-      .catch(() => {
-        if (active) setLoading(false);
-      });
-
-    return () => {
-      active = false;
-      if (blobSrc) URL.revokeObjectURL(blobSrc);
-    };
-  }, [fileId]);
-
-  if (loading) {
-    return (
-      <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-secondary)' }}>
-        <span className="spinner" style={{ width: 18, height: 18 }} />
-      </div>
-    );
-  }
-
-  if (blobSrc) {
-    return <img src={blobSrc} alt="Mascote" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />;
-  }
-
-  return (
-    <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-secondary)' }}>
-      <ImageIcon size={20} className="text-muted" />
-    </div>
-  );
 }
 
 function downloadDriveFile(url: string, fileName: string) {
@@ -190,8 +135,8 @@ function NewOrderForm({ onDone }: { onDone: () => void }) {
   const receiptInputRef = useRef<HTMLInputElement>(null);
 
   const [category, setCategory] = useState('');
-  const [showAddCategory, setShowAddCategory] = useState(false);
   const [showManageCategories, setShowManageCategories] = useState(false);
+  const [showAddCategory, setShowAddCategory] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState('');
   const [newCategoryError, setNewCategoryError] = useState<string | null>(null);
   const [savingCategory, setSavingCategory] = useState(false);
@@ -823,7 +768,7 @@ function MyOrdersList({ onNewOrder }: { onNewOrder: () => void }) {
                   order.status === 'pending' || order.status === 'production'
                     ? getSlaInfo(new Date(order.createdAtISO))
                     : null;
-                const firstImg = order.images && order.images.length > 0 ? order.images[0].url : null;
+                const firstImg = order.images && order.images.length > 0 ? order.images[0] : null;
                 const isReady = order.status === 'ready';
                 const hasRevision = (order as any).revisionRequested;
 
@@ -857,7 +802,7 @@ function MyOrdersList({ onNewOrder }: { onNewOrder: () => void }) {
                         onClick={() => setOpenOrder(order)}
                       >
                         {firstImg ? (
-                          <DriveThumb url={firstImg} />
+                          <DriveImage fileId={firstImg.path} alt={`Mascote do pedido #${order.orderNumber}`} />
                         ) : (
                           <div
                             style={{
@@ -971,7 +916,7 @@ function MyOrdersList({ onNewOrder }: { onNewOrder: () => void }) {
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '16px' }}>
                 {deliveredOrders.map((order) => {
-                  const firstImg = order.images && order.images.length > 0 ? order.images[0].url : null;
+                  const firstImg = order.images && order.images.length > 0 ? order.images[0] : null;
                   return (
                     <div
                       key={order.id}
@@ -1002,7 +947,7 @@ function MyOrdersList({ onNewOrder }: { onNewOrder: () => void }) {
                           onClick={() => setOpenOrder(order)}
                         >
                           {firstImg ? (
-                            <DriveThumb url={firstImg} />
+                            <DriveImage fileId={firstImg.path} alt={`Mascote do pedido #${order.orderNumber}`} />
                           ) : (
                             <div
                               style={{

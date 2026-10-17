@@ -9,20 +9,32 @@ interface Props {
   style?: CSSProperties;
 }
 
-/** Mostra uma imagem guardada no Drive, buscando-a com o token de acesso. */
+/**
+ * Mostra uma imagem guardada no Drive.
+ * 1) Tenta buscar com o token da conta conectada.
+ * 2) Se não conseguir, usa o endereço de miniatura do Drive.
+ * 3) Se nada funcionar, mostra um ícone.
+ */
 export default function DriveImage({ fileId, alt = 'Imagem', style }: Props) {
   const [src, setSrc] = useState<string | null>(null);
-  const [status, setStatus] = useState<'loading' | 'ok' | 'error'>('loading');
+  const [useThumb, setUseThumb] = useState(false);
+  const [thumbFailed, setThumbFailed] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    setSrc(null);
+    setUseThumb(false);
+    setThumbFailed(false);
+
     if (!fileId) {
-      setStatus('error');
+      setThumbFailed(true);
+      setLoading(false);
       return;
     }
 
     let active = true;
     let objectUrl: string | null = null;
-    setStatus('loading');
+    setLoading(true);
 
     (async () => {
       try {
@@ -35,9 +47,10 @@ export default function DriveImage({ fileId, alt = 'Imagem', style }: Props) {
         if (!active) return;
         objectUrl = URL.createObjectURL(blob);
         setSrc(objectUrl);
-        setStatus('ok');
       } catch {
-        if (active) setStatus('error');
+        if (active) setUseThumb(true);
+      } finally {
+        if (active) setLoading(false);
       }
     })();
 
@@ -47,7 +60,25 @@ export default function DriveImage({ fileId, alt = 'Imagem', style }: Props) {
     };
   }, [fileId]);
 
-  if (status === 'ok' && src) {
+  const box: CSSProperties = {
+    width: '100%',
+    height: '100%',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    background: 'var(--bg-secondary)',
+    ...style,
+  };
+
+  if (loading) {
+    return (
+      <div style={box}>
+        <span className="spinner" style={{ width: 18, height: 18 }} />
+      </div>
+    );
+  }
+
+  if (src) {
     return (
       <img
         src={src}
@@ -57,23 +88,21 @@ export default function DriveImage({ fileId, alt = 'Imagem', style }: Props) {
     );
   }
 
+  if (useThumb && fileId && !thumbFailed) {
+    return (
+      <img
+        src={`https://drive.google.com/thumbnail?id=${encodeURIComponent(fileId)}&sz=w800`}
+        alt={alt}
+        referrerPolicy="no-referrer"
+        onError={() => setThumbFailed(true)}
+        style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', ...style }}
+      />
+    );
+  }
+
   return (
-    <div
-      style={{
-        width: '100%',
-        height: '100%',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        background: 'var(--bg-secondary)',
-        ...style,
-      }}
-    >
-      {status === 'loading' ? (
-        <span className="spinner" style={{ width: 18, height: 18 }} />
-      ) : (
-        <ImageIcon size={20} className="text-muted" />
-      )}
+    <div style={box}>
+      <ImageIcon size={20} className="text-muted" />
     </div>
   );
 }
