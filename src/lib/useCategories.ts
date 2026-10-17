@@ -59,8 +59,14 @@ export async function deleteCategory(id: string): Promise<void> {
   await deleteDoc(doc(db, 'categories', id));
 }
 
+/** Lista de categorias em ordem alfabética (pt-BR), com "Outros" sempre por último. */
 export function allCategoryNames(categories: Category[]): string[] {
-  const names = categories.map((c) => c.name);
-  const merged = Array.from(new Set([...DEFAULT_CATEGORIES.filter((n) => n !== 'Outros'), ...names, 'Outros']));
-  return merged;
+  const names = Array.from(
+    new Set([
+      ...DEFAULT_CATEGORIES.filter((n) => n !== 'Outros'),
+      ...categories.map((c) => c.name).filter((n) => n !== 'Outros'),
+    ])
+  );
+  names.sort((a, b) => a.localeCompare(b, 'pt-BR', { sensitivity: 'base' }));
+  return [...names, 'Outros'];
 }

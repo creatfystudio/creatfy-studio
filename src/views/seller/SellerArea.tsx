@@ -19,6 +19,7 @@ import {
   ShieldCheck,
   Loader2,
   CheckCheck,
+  Plus,
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useOrders } from '../../lib/useOrders';
@@ -192,6 +193,8 @@ function NewOrderForm({ onDone }: { onDone: () => void }) {
   const [showAddCategory, setShowAddCategory] = useState(false);
   const [showManageCategories, setShowManageCategories] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState('');
+  const [newCategoryError, setNewCategoryError] = useState<string | null>(null);
+  const [savingCategory, setSavingCategory] = useState(false);
 
   const [submitting, setSubmitting] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
@@ -209,12 +212,39 @@ function NewOrderForm({ onDone }: { onDone: () => void }) {
     setScripts((prev) => prev.map((s, i) => (i === idx ? text : s)));
   }
 
-  async function handleAddCategory() {
-    if (!profile || !newCategoryName.trim()) return;
-    await addCategory(newCategoryName, profile.uid);
-    setCategory(newCategoryName.trim());
+  function openAddCategory() {
     setNewCategoryName('');
-    setShowAddCategory(false);
+    setNewCategoryError(null);
+    setShowAddCategory(true);
+  }
+
+  async function handleAddCategory() {
+    if (!profile || savingCategory) return;
+    const trimmed = newCategoryName.trim();
+    if (!trimmed) {
+      setNewCategoryError('Informe um nome para a categoria.');
+      return;
+    }
+
+    // Se a categoria já existe (sem diferenciar maiúsculas), só seleciona.
+    const existing = categoryNames.find((c) => c.toLowerCase() === trimmed.toLowerCase());
+    if (existing) {
+      setCategory(existing);
+      setShowAddCategory(false);
+      return;
+    }
+
+    setSavingCategory(true);
+    setNewCategoryError(null);
+    try {
+      await addCategory(trimmed, profile.uid);
+      setCategory(trimmed);
+      setShowAddCategory(false);
+    } catch (err: any) {
+      setNewCategoryError(err?.message || 'Não foi possível criar a categoria. Tente novamente.');
+    } finally {
+      setSavingCategory(false);
+    }
   }
 
   async function handleReceiptSelected(file: File) {
@@ -429,25 +459,29 @@ function NewOrderForm({ onDone }: { onDone: () => void }) {
 
       <div className="field">
         <label>Categoria / Área de atuação *</label>
-        <select
-          className="select"
-          value={category}
-          onChange={(e) => {
-            if (e.target.value === '__add__') {
-              setShowAddCategory(true);
-            } else {
-              setCategory(e.target.value);
-            }
-          }}
-        >
-          <option value="">Selecione…</option>
-          {categoryNames.map((c) => (
-            <option key={c} value={c}>
-              {c}
-            </option>
-          ))}
-          <option value="__add__">+ Adicionar nova categoria</option>
-        </select>
+        <div className="row gap-sm wrap" style={{ alignItems: 'center' }}>
+          <select
+            className="select flex-1"
+            style={{ minWidth: 0 }}
+            value={category}
+            onChange={(e) => setCategory(e.target.value)}
+          >
+            <option value="">Selecione…</option>
+            {categoryNames.map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            style={{ whiteSpace: 'nowrap' }}
+            onClick={openAddCategory}
+          >
+            <Plus size={14} /> Nova categoria
+          </button>
+        </div>
         <button
           type="button"
           className="btn btn-ghost btn-sm"
@@ -477,10 +511,32 @@ function NewOrderForm({ onDone }: { onDone: () => void }) {
         <Modal title="Nova categoria" onClose={() => setShowAddCategory(false)}>
           <div className="field">
             <label>Nome da categoria</label>
-            <input className="input" value={newCategoryName} onChange={(e) => setNewCategoryName(e.target.value)} />
+            <input
+              className="input"
+              autoFocus
+              value={newCategoryName}
+              onChange={(e) => setNewCategoryName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  handleAddCategory();
+                }
+              }}
+              placeholder="Ex.: Imobiliária"
+            />
           </div>
-          <button className="btn btn-primary btn-block" type="button" onClick={handleAddCategory}>
-            Adicionar
+          {newCategoryError && (
+            <div className="banner banner-error" style={{ marginBottom: 12 }}>
+              {newCategoryError}
+            </div>
+          )}
+          <button
+            className="btn btn-primary btn-block"
+            type="button"
+            onClick={handleAddCategory}
+            disabled={savingCategory || !newCategoryName.trim()}
+          >
+            {savingCategory ? 'A salvar…' : 'Adicionar'}
           </button>
         </Modal>
       )}
