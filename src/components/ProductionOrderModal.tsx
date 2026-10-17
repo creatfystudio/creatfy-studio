@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { Download, CheckCircle2, ExternalLink } from 'lucide-react';
+import { Download, CheckCircle2 } from 'lucide-react';
 import { Modal } from './Modal';
 import VideoUploader from './VideoUploader';
+import DriveImage from './DriveImage';
 import type { Order } from '../types';
 import { uploadVideoForOrder, finalizeOrder, getOrderOnce } from '../lib/orders';
 import { triggerBrowserDownload } from '../lib/storage';
@@ -11,63 +12,6 @@ function extractFileId(url: string | undefined): string | null {
   if (!url) return null;
   const match = url.match(/\/file\/d\/([a-zA-Z0-9_-]+)/) || url.match(/id=([a-zA-Z0-9_-]+)/);
   return match ? match[1] : null;
-}
-
-function DriveImageThumbnail({ url, alt }: { url: string; alt: string }) {
-  const [blobSrc, setBlobSrc] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const fileId = extractFileId(url);
-
-  useEffect(() => {
-    let active = true;
-    const token = localStorage.getItem('gdrive_access_token');
-
-    if (!fileId || !token) {
-      setLoading(false);
-      return;
-    }
-
-    fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then((res) => {
-        if (!res.ok) throw new Error('Falha ao baixar imagem');
-        return res.blob();
-      })
-      .then((blob) => {
-        if (active) {
-          const objectUrl = URL.createObjectURL(blob);
-          setBlobSrc(objectUrl);
-          setLoading(false);
-        }
-      })
-      .catch(() => {
-        if (active) setLoading(false);
-      });
-
-    return () => {
-      active = false;
-      if (blobSrc) URL.revokeObjectURL(blobSrc);
-    };
-  }, [fileId]);
-
-  if (loading) {
-    return (
-      <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-secondary)' }}>
-        <span className="spinner" style={{ width: 18, height: 18 }} />
-      </div>
-    );
-  }
-
-  if (blobSrc) {
-    return <img src={blobSrc} alt={alt} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />;
-  }
-
-  return (
-    <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-secondary)', fontSize: 10, color: 'var(--text-muted)' }}>
-      Mascote
-    </div>
-  );
 }
 
 interface Props {
@@ -138,7 +82,7 @@ export default function ProductionOrderModal({ order: initialOrder, onClose, onF
 
   function downloadAllImages() {
     currentOrder.images.forEach((img, i) => {
-      const fileId = extractFileId(img.url);
+      const fileId = extractFileId(img.url) || img.path;
       const token = localStorage.getItem('gdrive_access_token');
       if (fileId && token) {
         setTimeout(() => {
@@ -173,7 +117,7 @@ export default function ProductionOrderModal({ order: initialOrder, onClose, onF
         {currentOrder.images.map((img, i) => (
           <div key={img.path || i}>
             <div className="thumb" style={{ overflow: 'hidden', borderRadius: 8, height: 90 }}>
-              <DriveImageThumbnail url={img.url} alt={img.caption || 'Imagem do mascote'} />
+              <DriveImage fileId={img.path} alt={img.caption || 'Imagem do mascote'} />
             </div>
             {img.caption && <div className="text-sm text-muted" style={{ marginTop: 4 }}>{img.caption}</div>}
           </div>

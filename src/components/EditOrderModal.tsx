@@ -2,6 +2,7 @@ import React, { useId, useRef, useState } from 'react';
 import { Trash2 } from 'lucide-react';
 import { Modal } from './Modal';
 import ImageUploader, { type PendingImage } from './ImageUploader';
+import DriveImage from './DriveImage';
 import { useAuth } from '../contexts/AuthContext';
 import { useCategories, allCategoryNames } from '../lib/useCategories';
 import { updateOrder, addImagesToOrder, removeImageFromOrder } from '../lib/orders';
@@ -230,8 +231,8 @@ export default function EditOrderModal({ order, onClose, allowStatusChange, onRe
         ) : (
           <div className="thumb-grid">
             {order.images.map((img) => (
-              <div key={img.path} className="thumb">
-                <img src={img.url} alt={img.caption || 'Imagem do pedido'} />
+              <div key={img.path} className="thumb" style={{ height: 110, overflow: 'hidden', borderRadius: 8 }}>
+                <DriveImage fileId={img.path} alt={img.caption || 'Imagem do pedido'} />
                 <button
                   className="thumb-remove"
                   onClick={() => handleRemoveImage(img)}

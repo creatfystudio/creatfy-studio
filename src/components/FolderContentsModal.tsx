@@ -1,9 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import { Copy, Download, ExternalLink } from 'lucide-react';
 import { Modal } from './Modal';
+import DriveImage from './DriveImage';
 import type { Order } from '../types';
-import { buildFolderNameNoPhone } from '../lib/storage';
-import { triggerBrowserDownload } from '../lib/storage';
+import { buildFolderNameNoPhone, triggerBrowserDownload } from '../lib/storage';
 
 interface Props {
   order: Order;
@@ -16,65 +16,6 @@ function extractFileId(url: string | undefined): string | null {
   if (!url) return null;
   const match = url.match(/\/file\/d\/([a-zA-Z0-9_-]+)/) || url.match(/id=([a-zA-Z0-9_-]+)/);
   return match ? match[1] : null;
-}
-
-function DriveImageThumbnail({ url, alt }: { url: string; alt: string }) {
-  const [blobSrc, setBlobSrc] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const fileId = extractFileId(url);
-
-  useEffect(() => {
-    let active = true;
-    const token = localStorage.getItem('gdrive_access_token');
-
-    if (!fileId || !token) {
-      setLoading(false);
-      return;
-    }
-
-    // Busca o arquivo binário direto com o token do usuário para não sofrer bloqueio do Google
-    fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then((res) => {
-        if (!res.ok) throw new Error('Falha ao baixar imagem');
-        return res.blob();
-      })
-      .then((blob) => {
-        if (active) {
-          const objectUrl = URL.createObjectURL(blob);
-          setBlobSrc(objectUrl);
-          setLoading(false);
-        }
-      })
-      .catch(() => {
-        if (active) setLoading(false);
-      });
-
-    return () => {
-      active = false;
-      if (blobSrc) URL.revokeObjectURL(blobSrc);
-    };
-  }, [fileId]);
-
-  if (loading) {
-    return (
-      <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-secondary)' }}>
-        <span className="spinner" style={{ width: 20, height: 20 }} />
-      </div>
-    );
-  }
-
-  if (blobSrc) {
-    return <img src={blobSrc} alt={alt} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />;
-  }
-
-  // Fallback se não conseguir puxar via API
-  return (
-    <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-secondary)', padding: 8, textAlign: 'center' }}>
-      <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Mascote no Drive</span>
-    </div>
-  );
 }
 
 export default function FolderContentsModal({ order, hidePhone, onClose, footer }: Props) {
@@ -157,7 +98,7 @@ export default function FolderContentsModal({ order, hidePhone, onClose, footer 
           {order.images.map((img, i) => (
             <div key={img.path || i}>
               <div className="thumb" style={{ overflow: 'hidden', borderRadius: 8, height: 110 }}>
-                <DriveImageThumbnail url={img.url} alt={img.caption || 'Mascote'} />
+                <DriveImage fileId={img.path} alt={img.caption || 'Mascote'} />
               </div>
               {img.caption && <div className="text-sm text-muted" style={{ marginTop: 4 }}>{img.caption}</div>}
               <div className="row gap-xs" style={{ marginTop: 6 }}>
