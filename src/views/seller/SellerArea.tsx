@@ -218,6 +218,12 @@ function NewOrderForm({ onDone }: { onDone: () => void }) {
     setShowAddCategory(true);
   }
 
+  function cancelAddCategory() {
+    setShowAddCategory(false);
+    setNewCategoryName('');
+    setNewCategoryError(null);
+  }
+
   async function handleAddCategory() {
     if (!profile || savingCategory) return;
     const trimmed = newCategoryName.trim();
@@ -230,7 +236,7 @@ function NewOrderForm({ onDone }: { onDone: () => void }) {
     const existing = categoryNames.find((c) => c.toLowerCase() === trimmed.toLowerCase());
     if (existing) {
       setCategory(existing);
-      setShowAddCategory(false);
+      cancelAddCategory();
       return;
     }
 
@@ -239,7 +245,7 @@ function NewOrderForm({ onDone }: { onDone: () => void }) {
     try {
       await addCategory(trimmed, profile.uid);
       setCategory(trimmed);
-      setShowAddCategory(false);
+      cancelAddCategory();
     } catch (err: any) {
       setNewCategoryError(err?.message || 'Não foi possível criar a categoria. Tente novamente.');
     } finally {
@@ -482,6 +488,44 @@ function NewOrderForm({ onDone }: { onDone: () => void }) {
             <Plus size={14} /> Nova categoria
           </button>
         </div>
+
+        {showAddCategory && (
+          <div className="row gap-sm wrap" style={{ alignItems: 'center', marginTop: 8 }}>
+            <input
+              className="input flex-1"
+              style={{ minWidth: 0 }}
+              autoFocus
+              value={newCategoryName}
+              onChange={(e) => setNewCategoryName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  handleAddCategory();
+                }
+                if (e.key === 'Escape') cancelAddCategory();
+              }}
+              placeholder="Digite o nome e aperte Enter"
+            />
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={handleAddCategory}
+              disabled={savingCategory || !newCategoryName.trim()}
+            >
+              {savingCategory ? 'Salvando…' : 'Salvar'}
+            </button>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={cancelAddCategory}>
+              Cancelar
+            </button>
+          </div>
+        )}
+
+        {newCategoryError && (
+          <div className="banner banner-error" style={{ marginTop: 8 }}>
+            {newCategoryError}
+          </div>
+        )}
+
         <button
           type="button"
           className="btn btn-ghost btn-sm"
@@ -507,75 +551,6 @@ function NewOrderForm({ onDone }: { onDone: () => void }) {
         {submitting ? 'A guardar…' : 'Salvar pedido'}
       </button>
 
-      {showAddCategory && (
-        <div
-          onClick={() => setShowAddCategory(false)}
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0, 0, 0, 0.6)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1000,
-            padding: 16,
-          }}
-        >
-          <div
-            className="card"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="nova-categoria-titulo"
-            onClick={(e) => e.stopPropagation()}
-            style={{ width: '100%', maxWidth: 420, padding: 20 }}
-          >
-            <div className="row space-between" style={{ alignItems: 'center', marginBottom: 14 }}>
-              <h3 id="nova-categoria-titulo" style={{ margin: 0 }}>Nova categoria</h3>
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm"
-                onClick={() => setShowAddCategory(false)}
-                aria-label="Fechar"
-              >
-                <X size={16} />
-              </button>
-            </div>
-
-            <div className="field">
-              <label>Nome da categoria</label>
-              <input
-                className="input"
-                autoFocus
-                value={newCategoryName}
-                onChange={(e) => setNewCategoryName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault();
-                    handleAddCategory();
-                  }
-                  if (e.key === 'Escape') setShowAddCategory(false);
-                }}
-                placeholder="Ex.: Imobiliária"
-              />
-            </div>
-
-            {newCategoryError && (
-              <div className="banner banner-error" style={{ marginBottom: 12 }}>
-                {newCategoryError}
-              </div>
-            )}
-
-            <button
-              className="btn btn-primary btn-block"
-              type="button"
-              onClick={handleAddCategory}
-              disabled={savingCategory || !newCategoryName.trim()}
-            >
-              {savingCategory ? 'A salvar…' : 'Adicionar'}
-            </button>
-          </div>
-        </div>
-      )}
       {showManageCategories && <ManageCategoriesModal onClose={() => setShowManageCategories(false)} />}
     </form>
   );
