@@ -1,79 +1,126 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { X } from 'lucide-react';
 
-export function Modal({
-  title,
-  onClose,
-  children,
-  wide,
-}: {
+interface ModalProps {
   title: string;
   onClose: () => void;
-  children: React.ReactNode;
   wide?: boolean;
-}) {
+  children: React.ReactNode;
+}
+
+export function Modal({ title, onClose, wide, children }: ModalProps) {
+  // Guarda a versão mais recente de onClose sem refazer o efeito a cada render.
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+    // Trava a rolagem da página de fundo enquanto a janela estiver aberta.
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    function handleKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') onCloseRef.current();
+    }
+    window.addEventListener('keydown', handleKey);
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', handleKey);
     };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  }, []);
 
   return (
-    <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="modal" style={wide ? { maxWidth: 820 } : undefined}>
-        <div className="modal-header">
-          <h3>{title}</h3>
-          <button className="btn btn-icon btn-ghost" onClick={onClose} aria-label="Fechar">
-            <X size={18} />
+    <div
+      onClick={(e) => {
+        // Fecha só ao clicar no fundo escuro, não dentro da janela.
+        if (e.target === e.currentTarget) onClose();
+      }}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(0, 0, 0, 0.6)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 1000,
+        padding: 16,
+      }}
+    >
+      <div
+        className="card"
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        style={{
+          width: '100%',
+          maxWidth: wide ? 880 : 520,
+          maxHeight: 'calc(100vh - 32px)',
+          display: 'flex',
+          flexDirection: 'column',
+          padding: 0,
+          overflow: 'hidden',
+        }}
+      >
+        <div
+          className="row space-between"
+          style={{
+            alignItems: 'center',
+            padding: '16px 20px',
+            borderBottom: '1px solid var(--border)',
+            flexShrink: 0,
+          }}
+        >
+          <h3 style={{ margin: 0 }}>{title}</h3>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={onClose} aria-label="Fechar">
+            <X size={16} />
           </button>
         </div>
-        {children}
+
+        <div
+          style={{
+            padding: 20,
+            overflowY: 'auto',
+            minHeight: 0,
+            flex: '1 1 auto',
+          }}
+        >
+          {children}
+        </div>
       </div>
     </div>
   );
+}
+
+interface ConfirmDialogProps {
+  title: string;
+  message: string;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  danger?: boolean;
+  onCancel: () => void;
+  onConfirm: () => void | Promise<void>;
 }
 
 export function ConfirmDialog({
   title,
   message,
   confirmLabel = 'Confirmar',
+  cancelLabel = 'Cancelar',
   danger,
-  requireText,
   onCancel,
   onConfirm,
-}: {
-  title: string;
-  message: string;
-  confirmLabel?: string;
-  danger?: boolean;
-  requireText?: string;
-  onCancel: () => void;
-  onConfirm: () => void;
-}) {
-  const [typed, setTyped] = React.useState('');
-  const canConfirm = !requireText || typed.trim().toUpperCase() === requireText.toUpperCase();
-
+}: ConfirmDialogProps) {
   return (
     <Modal title={title} onClose={onCancel}>
-      <p style={{ marginBottom: 16 }}>{message}</p>
-      {requireText && (
-        <div className="field">
-          <label>
-            Digite <strong>{requireText}</strong> para confirmar
-          </label>
-          <input className="input" value={typed} onChange={(e) => setTyped(e.target.value)} />
-        </div>
-      )}
+      <p className="text-sm" style={{ marginBottom: 18 }}>{message}</p>
       <div className="row gap-sm" style={{ justifyContent: 'flex-end' }}>
-        <button className="btn btn-secondary" onClick={onCancel}>
-          Cancelar
+        <button type="button" className="btn btn-secondary" onClick={onCancel}>
+          {cancelLabel}
         </button>
         <button
-          className={danger ? 'btn btn-danger' : 'btn btn-primary'}
-          disabled={!canConfirm}
-          onClick={onConfirm}
+          type="button"
+          className={`btn ${danger ? 'btn-danger' : 'btn-primary'}`}
+          onClick={() => onConfirm()}
         >
           {confirmLabel}
         </button>
