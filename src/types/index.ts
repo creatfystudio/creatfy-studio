@@ -35,14 +35,14 @@ export interface ImageItem {
 
 export interface StatusHistoryEntry {
   status: OrderStatus;
-  at: string; // ISO string
+  at: string; // ISO
   byUid: string;
   byName: string;
 }
 
 export interface Order {
   id: string;
-  orderNumber: string; // 4-digit sequential, e.g. "0042"
+  orderNumber: string; // 4 dígitos, ex.: "0042"
   clientName: string;
   clientPhone: string;
   value: number;
@@ -50,6 +50,9 @@ export interface Order {
   videos: VideoItem[];
   images: ImageItem[];
   category: string;
+  recipientAccount?: string;
+  receiptUrl?: string;
+  receiptFileName?: string;
   status: OrderStatus;
   sellerId: string;
   sellerName: string;
@@ -64,6 +67,10 @@ export interface Order {
   finishedByUid?: string;
   finishedAt?: string | null;
   deliveredAt?: string | null;
+  revisionRequested?: boolean;
+  revisionNote?: string;
+  revisionRequestedAt?: string | null;
+  revisionRequestedBy?: string;
   statusHistory: StatusHistoryEntry[];
   sellerNotifiedReady?: boolean;
 }

@@ -1,117 +1,223 @@
 const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
 const SCOPES = 'https://www.googleapis.com/auth/drive.file';
+const TOKEN_KEY = 'gdrive_access_token';
+const EXPIRES_KEY = 'gdrive_token_expires_at';
+const FOLDER_MIME = 'application/vnd.google-apps.folder';
+const DRIVE_API = 'https://www.googleapis.com/drive/v3/files';
+const UPLOAD_API = 'https://www.googleapis.com/upload/drive/v3/files';
+const EXPIRED_MSG = 'A conexão com o Google Drive expirou. Reconecte em Usuários.';
 
 let tokenClient: any = null;
+let pendingPromise: Promise<string> | null = null;
+let pendingResolve: ((token: string) => void) | null = null;
+let pendingReject: ((err: Error) => void) | null = null;
 
-export function initGoogleDriveAuth(callback?: (token: string) => void) {
-  if (typeof window === 'undefined' || !(window as any).google?.accounts?.oauth2) return;
-  tokenClient = (window as any).google.accounts.oauth2.initTokenClient({
-    client_id: CLIENT_ID,
-    scope: SCOPES,
-    callback: (response: any) => {
-      if (response.access_token) {
-        localStorage.setItem('gdrive_access_token', response.access_token);
-        if (callback) callback(response.access_token);
-      }
-    },
-  });
+function settle(error: Error | null, token?: string) {
+  const resolve = pendingResolve;
+  const reject = pendingReject;
+  pendingPromise = null;
+  pendingResolve = null;
+  pendingReject = null;
+  if (error) reject?.(error);
+  else if (token) resolve?.(token);
 }
 
-export function connectGoogleDrive(): Promise<string> {
-  return new Promise((resolve, reject) => {
-    try {
-      initGoogleDriveAuth((t) => resolve(t));
-      if (tokenClient) {
-        tokenClient.requestAccessToken({ prompt: 'consent' });
-      } else {
-        reject(new Error('A biblioteca do Google ainda está carregando. Tente novamente em alguns segundos.'));
+function saveToken(token: string, expiresIn = 3600) {
+  localStorage.setItem(TOKEN_KEY, token);
+  // Margem de 5 minutos antes da expiração real.
+  localStorage.setItem(EXPIRES_KEY, String(Date.now() + (expiresIn - 300) * 1000));
+}
+
+function ensureTokenClient(): boolean {
+  if (tokenClient) return true;
+  const oauth2 = (window as any).google?.accounts?.oauth2;
+  if (!oauth2) return false;
+
+  tokenClient = oauth2.initTokenClient({
+    client_id: CLIENT_ID,
+    scope: SCOPES,
+    callback: (resp: any) => {
+      if (resp.error || !resp.access_token) {
+        settle(new Error(resp.error_description || 'Não foi possível autorizar o Google Drive.'));
+        return;
       }
-    } catch (err) {
-      reject(err);
-    }
+      saveToken(resp.access_token, resp.expires_in);
+      settle(null, resp.access_token);
+    },
+    error_callback: (err: any) => {
+      settle(new Error(`Autorização do Google não concluída (${err?.type || 'erro'}).`));
+    },
   });
+  return true;
+}
+
+function requestToken(prompt: '' | 'consent'): Promise<string> {
+  if (pendingPromise) return pendingPromise;
+  if (!ensureTokenClient()) {
+    return Promise.reject(new Error('A biblioteca do Google ainda está carregando. Tente em alguns segundos.'));
+  }
+
+  const p = new Promise<string>((resolve, reject) => {
+    pendingResolve = resolve;
+    pendingReject = reject;
+  });
+  pendingPromise = p;
+
+  try {
+    tokenClient.requestAccessToken({ prompt });
+  } catch (err) {
+    settle(err instanceof Error ? err : new Error('Falha ao pedir autorização ao Google.'));
+  }
+  return p;
+}
+
+/** Conexão inicial, com janela de consentimento. */
+export async function connectGoogleDrive(): Promise<string> {
+  return requestToken('consent');
+}
+
+/** Devolve um token válido, renovando em segundo plano se necessário. */
+export async function getValidToken(): Promise<string> {
+  const token = localStorage.getItem(TOKEN_KEY);
+  if (!token) throw new Error('Google Drive não está conectado. Conecte sua conta em Usuários.');
+
+  const expiresAt = Number(localStorage.getItem(EXPIRES_KEY) || 0);
+  if (Date.now() < expiresAt) return token;
+
+  try {
+    return await requestToken('');
+  } catch {
+    throw new Error(EXPIRED_MSG);
+  }
 }
 
 export function isDriveConnected(): boolean {
-  return !!localStorage.getItem('gdrive_access_token');
+  return !!localStorage.getItem(TOKEN_KEY);
 }
 
-export function disconnectGoogleDrive() {
-  localStorage.removeItem('gdrive_access_token');
+export function disconnectGoogleDrive(): void {
+  const token = localStorage.getItem(TOKEN_KEY);
+  if (token) (window as any).google?.accounts?.oauth2?.revoke?.(token, () => {});
+  localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(EXPIRES_KEY);
 }
+
+async function driveFetch(url: string, init: RequestInit = {}): Promise<any> {
+  const token = await getValidToken();
+  const res = await fetch(url, {
+    ...init,
+    headers: { ...(init.headers as Record<string, string> | undefined), Authorization: `Bearer ${token}` },
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    // Força renovação na próxima chamada se o token foi recusado.
+    if (res.status === 401) localStorage.removeItem(EXPIRES_KEY);
+    throw new Error(data?.error?.message || `Erro do Google Drive (HTTP ${res.status}).`);
+  }
+  return data;
+}
+
+const escapeQuery = (value: string) => value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 
 export async function getOrCreateFolder(folderName: string, parentId?: string): Promise<string> {
-  const token = localStorage.getItem('gdrive_access_token');
-  if (!token) throw new Error('Google Drive não está conectado. Conecte sua conta em Usuários.');
+  let q = `mimeType='${FOLDER_MIME}' and name='${escapeQuery(folderName)}' and trashed=false`;
+  if (parentId) q += ` and '${escapeQuery(parentId)}' in parents`;
 
-  let q = `mimeType='application/vnd.google-apps.folder' and name='${folderName}' and trashed=false`;
-  if (parentId) q += ` and '${parentId}' in parents`;
+  const params = new URLSearchParams({ q, fields: 'files(id)', pageSize: '1' });
+  const search = await driveFetch(`${DRIVE_API}?${params.toString()}`);
+  if (search.files?.length) return search.files[0].id;
 
-  const searchRes = await fetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  const data = await searchRes.json();
-
-  if (data.files && data.files.length > 0) {
-    return data.files[0].id;
-  }
-
-  const metadata: any = {
-    name: folderName,
-    mimeType: 'application/vnd.google-apps.folder',
-  };
-  if (parentId) metadata.parents = [parentId];
-
-  const createRes = await fetch('https://www.googleapis.com/drive/v3/files', {
+  const created = await driveFetch(DRIVE_API, {
     method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(metadata),
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: folderName,
+      mimeType: FOLDER_MIME,
+      ...(parentId ? { parents: [parentId] } : {}),
+    }),
   });
-  const created = await createRes.json();
   return created.id;
 }
 
-export async function uploadToDrive(
+/** Envia os bytes com XMLHttpRequest, que permite acompanhar o progresso. */
+function putWithProgress(
+  url: string,
   file: Blob,
-  fileName: string,
-  folderId: string
-): Promise<{ url: string; fileId: string }> {
-  const token = localStorage.getItem('gdrive_access_token');
-  if (!token) throw new Error('Google Drive desconectado.');
-
-  const metadata = {
-    name: fileName,
-    parents: [folderId],
-  };
-
-  const form = new FormData();
-  form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
-  form.append('file', file);
-
-  const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}` },
-    body: form,
+  mimeType: string,
+  onProgress?: (pct: number) => void
+): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', url);
+    xhr.setRequestHeader('Content-Type', mimeType);
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) onProgress?.(Math.round((e.loaded / e.total) * 100));
+    };
+    xhr.onload = () => {
+      let body: any = {};
+      try {
+        body = JSON.parse(xhr.responseText || '{}');
+      } catch {
+        // Resposta sem JSON: segue com o objeto vazio.
+      }
+      if (xhr.status >= 200 && xhr.status < 300) resolve(body);
+      else reject(new Error(body?.error?.message || `Falha no envio (HTTP ${xhr.status}).`));
+    };
+    xhr.onerror = () => reject(new Error('Falha de rede durante o envio para o Google Drive.'));
+    xhr.onabort = () => reject(new Error('Envio cancelado.'));
+    xhr.send(file);
   });
+}
 
-  const result = await res.json();
-  if (!res.ok) throw new Error(result.error?.message || 'Erro no upload para o Drive');
+export async function uploadToDrive(
+  file: Blob | File,
+  fileName: string,
+  folderId: string,
+  onProgress?: (pct: number) => void
+): Promise<{ url: string; fileId: string }> {
+  const token = await getValidToken();
+  // Remove parâmetros como ";charset=utf-8", que o Drive não aceita no MIME.
+  const mimeType = (file.type || 'application/octet-stream').split(';')[0].trim();
 
-  // Concede permissão de visualização do link
-  await fetch(`https://www.googleapis.com/drive/v3/files/${result.id}/permissions`, {
+  const initRes = await fetch(`${UPLOAD_API}?uploadType=resumable`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
+      'Content-Type': 'application/json; charset=UTF-8',
+      'X-Upload-Content-Type': mimeType,
+      'X-Upload-Content-Length': String(file.size),
     },
+    body: JSON.stringify({ name: fileName, parents: [folderId] }),
+  });
+
+  const uploadUrl = initRes.headers.get('Location');
+  if (!initRes.ok || !uploadUrl) {
+    throw new Error('Falha ao iniciar o envio para o Google Drive.');
+  }
+
+  const result = await putWithProgress(uploadUrl, file, mimeType, onProgress);
+
+  await driveFetch(`${DRIVE_API}/${result.id}/permissions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ role: 'reader', type: 'anyone' }),
   });
 
+  onProgress?.(100);
+
   return {
-    url: `https://drive.google.com/file/d/${result.id}/view?usp=drivesdk`,
+    url: `https://drive.google.com/file/d/${result.id}/view?usp=sharing`,
     fileId: result.id,
   };
+}
+
+/** Miniatura de imagem ou vídeo do Drive (funciona com arquivos compartilhados por link). */
+export function driveThumbnailUrl(fileId: string, size = 400): string {
+  return `https://drive.google.com/thumbnail?id=${encodeURIComponent(fileId)}&sz=w${size}`;
+}
+
+/** Player oficial do Drive, para usar dentro de um iframe. */
+export function drivePreviewUrl(fileId: string): string {
+  return `https://drive.google.com/file/d/${encodeURIComponent(fileId)}/preview`;
+}
 }

@@ -1,6 +1,6 @@
-const DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/1560351712122900571/Tdbb_o1ectMLUT_G_cOs0NATzTx6HCi_vp-8wZSb7Pt6QiZrLd5c7FicbJJ5Kv2D278a'; 
-const TELEGRAM_BOT_TOKEN = '8827925242:AAFnGCL8YglMl_DSU4ksMegH-d7aMUFcjR4';
-const TELEGRAM_CHAT_ID = '803132170';
+const DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/1560778728701698108/mlRXf7mz6ezK5em8UmjI3y8rf8UqXSMYRE6R9HdUSaP628V0CsV-2f-idsRtV7lBCG9o'; 
+const TELEGRAM_BOT_TOKEN = '8982728624:AAHHNwdTdT58n-w-VjQK7G51ap73S2-DWG4';
+const TELEGRAM_CHAT_ID = '-1003892186022';
 
 export interface OrderNotificationData {
   title: string;
@@ -9,25 +9,29 @@ export interface OrderNotificationData {
   value: string;
   videoCount: number;
   cargo: string;
+  sellerName?: string; // Nome explícito do vendedor
   saleDate: string;
   deliveryDate?: string;
-  isDetailed?: boolean; // Define se a notificação é completa (novo pedido) ou resumida
-  customMessage?: string; // Para avisos rápidos como início, uploads ou revisões
+  isDetailed?: boolean;
+  customMessage?: string;
 }
 
 export async function sendOrderNotification(data: OrderNotificationData) {
   let discordMessage = '';
   let telegramMessage = '';
 
+  const sellerInfo = data.sellerName ? `• 👤 **Vendedor:** ${data.sellerName}\n` : '';
+  const sellerInfoTg = data.sellerName ? `• 👤 *Vendedor:* ${data.sellerName}\n` : '';
+
   if (data.isDetailed) {
-    // 🚀 NOTIFICAÇÃO COMPLETA (Apenas quando o vendedor cria o pedido pela primeira vez)
     discordMessage = [
       `🚀 **${data.title}**`,
       `👤 **Nome do Cliente:** ${data.clientName}`,
       `📱 **Telefone (WhatsApp):** ${data.clientPhone}`,
       `💰 **Valor da Venda:** ${data.value}`,
       `🎬 **Quantidade de Vídeos:** ${data.videoCount}`,
-      `💼 **Cargo / Vendedor:** ${data.cargo}`,
+      `💼 **Cargo / Responsável:** ${data.cargo}`,
+      data.sellerName ? `🤝 **Vendedor:** ${data.sellerName}` : '',
       `📅 **Data de Venda:** ${data.saleDate}`,
       data.deliveryDate ? `📦 **Data de Entrega:** ${data.deliveryDate}` : '',
     ].filter(Boolean).join('\n');
@@ -38,31 +42,32 @@ export async function sendOrderNotification(data: OrderNotificationData) {
       `📱 *Telefone (WhatsApp):* ${data.clientPhone}`,
       `💰 *Valor da Venda:* ${data.value}`,
       `🎬 *Quantidade de Vídeos:* ${data.videoCount}`,
-      `💼 *Cargo / Vendedor:* ${data.cargo}`,
+      `💼 *Cargo / Responsável:* ${data.cargo}`,
+      data.sellerName ? `🤝 *Vendedor:* ${data.sellerName}` : '',
       `📅 *Data de Venda:* ${data.saleDate}`,
       data.deliveryDate ? `📦 *Data de Entrega:* ${data.deliveryDate}` : '',
     ].filter(Boolean).join('\n');
   } else {
-    // ✨ NOTIFICAÇÕES ORGANIZADAS E RÁPIDAS COM EMOJIS PARA OS OUTROS PROCESSOS
     const emojiTitle = data.title;
     const detail = data.customMessage ? `\n💬 *Obs:* ${data.customMessage}` : '';
 
     discordMessage = [
       `${emojiTitle}`,
       `• 📋 **Cliente:** ${data.clientName}`,
-      `• 🎬 **Pedido:** #${data.clientPhone || 'Geral'}`,
+      sellerInfo.replace('• ', '• 🤝 '),
+      `• 🎬 **Detalhe:** Pedido #${data.clientPhone || 'Geral'}`,
       detail,
     ].filter(Boolean).join('\n');
 
     telegramMessage = [
       `${emojiTitle}`,
       `• 📋 *Cliente:* ${data.clientName}`,
+      sellerInfoTg.replace('• ', '• 🤝 '),
       `• 🎬 *Detalhe:* Pedido de ${data.clientName}`,
       detail,
     ].filter(Boolean).join('\n');
   }
 
-  // 1. Envia para o Discord
   if (DISCORD_WEBHOOK_URL) {
     fetch(DISCORD_WEBHOOK_URL, {
       method: 'POST',
@@ -71,7 +76,6 @@ export async function sendOrderNotification(data: OrderNotificationData) {
     }).catch(() => {});
   }
 
-  // 2. Envia para o Telegram
   if (TELEGRAM_BOT_TOKEN && TELEGRAM_CHAT_ID) {
     fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
       method: 'POST',

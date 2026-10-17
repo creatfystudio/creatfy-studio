@@ -1,4 +1,5 @@
 import {
+  arrayUnion,
   collection,
   deleteDoc,
   doc,
@@ -29,6 +30,17 @@ function ordersCol() {
   return collection(db, 'orders');
 }
 
+function getTargetFolder(order: Order): string {
+  return order.folderName || order.folderPath || `#${order.orderNumber} - ${order.clientName}`;
+}
+
+/** Lê o pedido atual do Firestore para não sobrescrever alterações feitas por outra pessoa. */
+async function getCurrentOrder(order: Order): Promise<Order> {
+  const current = await getOrderOnce(order.id);
+  if (!current) throw new Error('Pedido não encontrado. Ele pode ter sido excluído.');
+  return current;
+}
+
 export interface NewOrderInput {
   clientName: string;
   clientPhone: string;
@@ -52,18 +64,21 @@ export async function createOrder(
   const folderName = buildFolderName(orderNumber, input.clientName, input.clientPhone, now);
   const folderPath = buildFolderPath(folderName);
 
-  const uploadedPaths: string[] = [];
   const images: ImageItem[] = [];
   let receiptUrl = '';
   let receiptFileName = '';
 
-  const totalSteps = input.images.length + 1 + 1;
+  const totalSteps = input.images.length + 2; // resumo + imagens + comprovante
   let completedSteps = 0;
+
+  // Remove a pasta inteira caso algo falhe, para não deixar arquivos órfãos no Drive.
+  const cleanupFolder = () =>
+    deleteFolderRecursive(folderPath).catch((e) => console.warn('[orders] falha ao limpar pasta', e));
 
   try {
     const txtLines = [
       `========================================`,
-      `        MASCOTFY STUDIO - PEDIDO #${orderNumber}`,
+      `        CREATFY STUDIO - PEDIDO #${orderNumber}`,
       `========================================`,
       `Data: ${now.toLocaleString('pt-BR')}`,
       `Vendedor: ${input.sellerName}`,
@@ -94,7 +109,6 @@ export async function createOrder(
       const blob = img.convertedBlob || img.originalFile;
       const fileName = img.convertedFileName || img.originalFile.name;
       const result = await uploadOrderImage(folderName, blob, fileName);
-      uploadedPaths.push(result.path);
       images.push({
         url: result.url || '',
         path: result.path || '',
@@ -107,15 +121,13 @@ export async function createOrder(
       onImageProgress?.(completedSteps, totalSteps);
     }
 
-    if (input.receiptFile) {
-      const receiptRes = await uploadOrderReceipt(folderName, input.receiptFile);
-      receiptUrl = receiptRes.url;
-      receiptFileName = input.receiptFile.name;
-      completedSteps++;
-      onImageProgress?.(completedSteps, totalSteps);
-    }
+    const receiptRes = await uploadOrderReceipt(folderName, input.receiptFile);
+    receiptUrl = receiptRes.url;
+    receiptFileName = input.receiptFile.name;
+    completedSteps++;
+    onImageProgress?.(completedSteps, totalSteps);
   } catch (err) {
-    await Promise.all(uploadedPaths.map((p) => deleteFileAtPath(p)));
+    await cleanupFolder();
     throw new Error('Não foi possível enviar os arquivos para o Google Drive. Verifique sua conexão e tente novamente.');
   }
 
@@ -132,7 +144,7 @@ export async function createOrder(
   };
 
   const orderRef = doc(ordersCol());
-  const orderData: Record<string, any> = {
+  const orderData: Record<string, unknown> = {
     orderNumber,
     clientName: input.clientName.trim(),
     clientPhone: input.clientPhone || '',
@@ -154,17 +166,24 @@ export async function createOrder(
     statusHistory: [initialHistory],
   };
 
-  await setDoc(orderRef, orderData);
+  try {
+    await setDoc(orderRef, orderData);
+  } catch (err) {
+    await cleanupFolder();
+    throw new Error('Não foi possível salvar o pedido. Tente novamente.');
+  }
 
-  // Notificação de Novo Pedido formatada
-  await sendOrderNotification({
-    title: `Novo Pedido Registado! (#${orderNumber}) 🚀`,
+  // Não aguarda: falha de notificação não deve travar o cadastro.
+  void sendOrderNotification({
+    title: `Novo Pedido Registado! (#${orderNumber})`,
     clientName: input.clientName.trim(),
     clientPhone: input.clientPhone,
     value: formatCurrency(input.value),
     videoCount: input.videoCount,
-    cargo: `Vendedor (${input.sellerName})`,
+    cargo: 'Vendedor',
+    sellerName: input.sellerName,
     saleDate: formatDate(now),
+    isDetailed: true,
   });
 
   return orderRef.id;
@@ -175,13 +194,25 @@ function historyEntry(status: OrderStatus, byUid: string, byName: string): Statu
 }
 
 export async function startProduction(order: Order, byUid: string, byName: string): Promise<void> {
-  const nowISO = new Date().toISOString();
   await updateDoc(doc(db, 'orders', order.id), {
     status: 'production' as OrderStatus,
     startedBy: byName,
     startedByUid: byUid,
-    startedAt: nowISO,
-    statusHistory: [...order.statusHistory, historyEntry('production', byUid, byName)],
+    startedAt: new Date().toISOString(),
+    statusHistory: arrayUnion(historyEntry('production', byUid, byName)),
+  });
+
+  void sendOrderNotification({
+    title: `🎬 Produção 3D Iniciada! (#${order.orderNumber})`,
+    clientName: order.clientName,
+    clientPhone: order.clientPhone,
+    value: '',
+    videoCount: order.videoCount,
+    cargo: 'Criador',
+    sellerName: order.sellerName,
+    saleDate: '',
+    isDetailed: false,
+    customMessage: `Iniciado por ${byName}.`,
   });
 }
 
@@ -191,14 +222,26 @@ export async function requestOrderRevision(
   byUid: string,
   byName: string
 ): Promise<void> {
-  const nowISO = new Date().toISOString();
   await updateDoc(doc(db, 'orders', order.id), {
     status: 'production' as OrderStatus,
     revisionRequested: true,
     revisionNote: revisionNote.trim(),
-    revisionRequestedAt: nowISO,
+    revisionRequestedAt: new Date().toISOString(),
     revisionRequestedBy: byName,
-    statusHistory: [...order.statusHistory, historyEntry('production', byUid, byName)],
+    statusHistory: arrayUnion(historyEntry('production', byUid, byName)),
+  });
+
+  void sendOrderNotification({
+    title: `🔄 Alteração Solicitada! (#${order.orderNumber})`,
+    clientName: order.clientName,
+    clientPhone: order.clientPhone,
+    value: '',
+    videoCount: order.videoCount,
+    cargo: 'Vendedor',
+    sellerName: order.sellerName,
+    saleDate: '',
+    isDetailed: false,
+    customMessage: revisionNote.trim(),
   });
 }
 
@@ -208,70 +251,79 @@ export async function uploadVideoForOrder(
   file: File,
   onProgress?: (pct: number) => void
 ): Promise<void> {
-  const targetFolder = order.folderName || order.folderPath || `#${order.orderNumber} - ${order.clientName}`;
-  const result = await uploadOrderVideo(targetFolder, videoIndex, file, onProgress);
+  const current = await getCurrentOrder(order);
+  const result = await uploadOrderVideo(getTargetFolder(current), videoIndex, file, onProgress);
 
-  const nextVideos = order.videos.map((v) =>
-    v.index === videoIndex
-      ? {
-          ...v,
-          videoUrl: result.url || '',
-          videoPath: result.path || '',
-          fileName: file.name || `video-${videoIndex}.mp4`,
-          uploadedAt: new Date().toISOString(),
-        }
-      : v
-  );
+  try {
+    const nextVideos = current.videos.map((v) =>
+      v.index === videoIndex
+        ? {
+            ...v,
+            videoUrl: result.url || '',
+            videoPath: result.path || '',
+            fileName: file.name || `video-${videoIndex}.mp4`,
+            uploadedAt: new Date().toISOString(),
+          }
+        : v
+    );
 
-  await updateDoc(doc(db, 'orders', order.id), {
-    videos: nextVideos,
-    ...(order.status === 'pending' ? { status: 'production' as OrderStatus } : {}),
-  });
+    await updateDoc(doc(db, 'orders', order.id), {
+      videos: nextVideos,
+      ...(current.status === 'pending' ? { status: 'production' as OrderStatus } : {}),
+    });
+  } catch (err) {
+    // Sem registro no pedido, o vídeo ficaria órfão no Drive.
+    if (result.path) await deleteFileAtPath(result.path).catch(() => undefined);
+    throw new Error('Não foi possível registrar o vídeo no pedido. Tente novamente.');
+  }
 }
 
 export async function finalizeOrder(order: Order, byUid: string, byName: string): Promise<void> {
-  const allUploaded = order.videos.every((v) => !!v.videoUrl);
+  const current = await getCurrentOrder(order);
+  const allUploaded = current.videos.every((v) => !!v.videoUrl);
   if (!allUploaded) throw new Error('Envie todos os vídeos antes de finalizar o pedido.');
-  const nowISO = new Date().toISOString();
+
   await updateDoc(doc(db, 'orders', order.id), {
     status: 'ready' as OrderStatus,
     finishedBy: byName,
     finishedByUid: byUid,
-    finishedAt: nowISO,
-    statusHistory: [...order.statusHistory, historyEntry('ready', byUid, byName)],
+    finishedAt: new Date().toISOString(),
+    revisionRequested: false,
+    statusHistory: arrayUnion(historyEntry('ready', byUid, byName)),
   });
 
-  // Notificação de Vídeo Pronto/Finalizado
-  await sendOrderNotification({
-    title: `Produção Finalizada! (#${order.orderNumber}) 🎉`,
+  void sendOrderNotification({
+    title: `🎉 Produção Finalizada! (#${order.orderNumber})`,
     clientName: order.clientName,
     clientPhone: order.clientPhone,
-    value: formatCurrency(order.value),
+    value: '',
     videoCount: order.videoCount,
-    cargo: `Criador de Vídeos (${byName})`,
-    saleDate: formatDate(new Date(order.createdAtISO)),
-    deliveryDate: formatDate(new Date()),
+    cargo: 'Criador',
+    sellerName: order.sellerName,
+    saleDate: '',
+    isDetailed: false,
+    customMessage: `Finalizado por ${byName}! Pronto para entrega.`,
   });
 }
 
 export async function markDelivered(order: Order, byUid: string, byName: string): Promise<void> {
-  const nowISO = new Date().toISOString();
   await updateDoc(doc(db, 'orders', order.id), {
     status: 'delivered' as OrderStatus,
-    deliveredAt: nowISO,
-    statusHistory: [...order.statusHistory, historyEntry('delivered', byUid, byName)],
+    deliveredAt: new Date().toISOString(),
+    statusHistory: arrayUnion(historyEntry('delivered', byUid, byName)),
   });
 
-  // Notificação de Pedido Entregue ao Cliente
-  await sendOrderNotification({
-    title: `Pedido Entregue! (#${order.orderNumber}) ✅`,
+  void sendOrderNotification({
+    title: `✅ Vídeo Entregue! (#${order.orderNumber})`,
     clientName: order.clientName,
     clientPhone: order.clientPhone,
-    value: formatCurrency(order.value),
+    value: '',
     videoCount: order.videoCount,
-    cargo: `Vendedor / Gestor (${byName})`,
-    saleDate: formatDate(new Date(order.createdAtISO)),
-    deliveryDate: formatDate(new Date()),
+    cargo: 'Vendedor',
+    sellerName: order.sellerName,
+    saleDate: '',
+    isDetailed: false,
+    customMessage: `Entregue com sucesso por ${byName}.`,
   });
 }
 
@@ -281,7 +333,8 @@ export interface EditableOrderFields {
   value: number;
   category: string;
   scripts: string[];
-  status: OrderStatus;
+  /** Enviado só quando o usuário tem permissão para alterar o status. */
+  status?: OrderStatus;
 }
 
 export async function updateOrder(
@@ -290,7 +343,12 @@ export async function updateOrder(
   byUid: string,
   byName: string
 ): Promise<void> {
-  const nextVideos = order.videos.map((v, idx) => ({ ...v, script: fields.scripts[idx] ?? v.script }));
+  const current = await getCurrentOrder(order);
+  const nextVideos = current.videos.map((v, idx) => ({
+    ...v,
+    script: fields.scripts[idx] ?? v.script,
+  }));
+
   const payload: Record<string, unknown> = {
     clientName: fields.clientName.trim(),
     clientPhone: fields.clientPhone,
@@ -298,44 +356,65 @@ export async function updateOrder(
     category: fields.category,
     videos: nextVideos,
   };
-  if (fields.status !== order.status) {
+
+  if (fields.status !== undefined && fields.status !== current.status) {
     payload.status = fields.status;
-    payload.statusHistory = [...order.statusHistory, historyEntry(fields.status, byUid, byName)];
+    payload.statusHistory = arrayUnion(historyEntry(fields.status, byUid, byName));
   }
+
   await updateDoc(doc(db, 'orders', order.id), payload);
 }
 
 export async function addImagesToOrder(order: Order, newImages: PendingImage[]): Promise<void> {
-  const startIndex = order.images.length;
+  const current = await getCurrentOrder(order);
+  const startIndex = current.images.length;
+  const targetFolder = getTargetFolder(current);
   const added: ImageItem[] = [];
-  const targetFolder = order.folderName || order.folderPath || `#${order.orderNumber} - ${order.clientName}`;
 
-  for (let i = 0; i < newImages.length; i++) {
-    const img = newImages[i];
-    const blob = img.convertedBlob || img.originalFile;
-    const fileName = img.convertedFileName || img.originalFile.name;
-    const result = await uploadOrderImage(targetFolder, blob, fileName);
-    added.push({
-      url: result.url || '',
-      path: result.path || '',
-      caption: img.caption || '',
-      order: startIndex + i,
-      originalName: img.originalFile?.name || fileName,
-      converted: !!img.convertedBlob,
-    });
+  try {
+    for (let i = 0; i < newImages.length; i++) {
+      const img = newImages[i];
+      const blob = img.convertedBlob || img.originalFile;
+      const fileName = img.convertedFileName || img.originalFile.name;
+      const result = await uploadOrderImage(targetFolder, blob, fileName);
+      added.push({
+        url: result.url || '',
+        path: result.path || '',
+        caption: img.caption || '',
+        order: startIndex + i,
+        originalName: img.originalFile?.name || fileName,
+        converted: !!img.convertedBlob,
+      });
+    }
+
+    await updateDoc(doc(db, 'orders', order.id), { images: [...current.images, ...added] });
+  } catch (err) {
+    await Promise.all(added.map((i) => deleteFileAtPath(i.path).catch(() => undefined)));
+    throw new Error('Não foi possível adicionar as imagens. Tente novamente.');
   }
-  await updateDoc(doc(db, 'orders', order.id), { images: [...order.images, ...added] });
 }
 
 export async function removeImageFromOrder(order: Order, image: ImageItem): Promise<void> {
-  await deleteFileAtPath(image.path);
+  const current = await getCurrentOrder(order);
+
+  // Atualiza o banco primeiro: se falhar, a imagem continua listada e o arquivo continua existindo.
   await updateDoc(doc(db, 'orders', order.id), {
-    images: order.images.filter((i) => i.path !== image.path),
+    images: current.images.filter((i) => i.path !== image.path),
   });
+
+  // Se a remoção do arquivo falhar, sobra só um arquivo órfão, o que não quebra o pedido.
+  await deleteFileAtPath(image.path).catch((e) =>
+    console.warn('[orders] imagem removida do pedido, mas o arquivo não foi apagado', e)
+  );
 }
 
 export async function deleteOrder(order: Order): Promise<void> {
-  await deleteFolderRecursive(order.folderPath);
+  const folderToDelete =
+    order.folderPath || (order.folderName ? buildFolderPath(order.folderName) : '');
+
+  if (folderToDelete) {
+    await deleteFolderRecursive(folderToDelete);
+  }
   await deleteDoc(doc(db, 'orders', order.id));
 }
 
@@ -353,12 +432,14 @@ export async function clearAllData(orders: Order[]): Promise<void> {
 
 export function buildWhatsAppUrl(phone: string, message: string): string {
   const digits = digitsOnly(phone);
-  const withCountryCode = digits.startsWith('55') ? digits : `55${digits}`;
+  // Com código do país o número tem 12 ou 13 dígitos (55 + DDD + número).
+  const hasCountryCode = (digits.length === 12 || digits.length === 13) && digits.startsWith('55');
+  const withCountryCode = hasCountryCode ? digits : `55${digits}`;
   return `https://wa.me/${withCountryCode}?text=${encodeURIComponent(message)}`;
 }
 
 export function buildDeliveryMessage(clientName: string, videoUrl: string): string {
-  return `Olá, ${clientName}! Tudo bem? 😊\n\nSeu vídeo do mascote está pronto! Aqui está o link para assistir e baixar:\n${videoUrl}\n\nQualquer dúvida, estamos à disposição. Obrigado pela confiança! — Mascotfy Studio`;
+  return `Olá, ${clientName}! Tudo bem? 😊\n\nSeu vídeo está pronto! Aqui está o link para assistir e baixar:\n${videoUrl}\n\nQualquer dúvida, estamos à disposição. Obrigado pela confiança! — Creatfy Studio`;
 }
 
 export async function getOrderOnce(orderId: string): Promise<Order | null> {

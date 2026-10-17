@@ -7,14 +7,13 @@ import {
   PlayCircle,
   AlertTriangle,
   Image as ImageIcon,
-  Video as VideoIcon,
   ExternalLink,
   CheckCircle2,
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useOrders } from '../../lib/useOrders';
 import { startProduction } from '../../lib/orders';
-import { formatDate, formatDateTime, getSlaInfo, normalizeSearch } from '../../lib/utils';
+import { formatDate, getSlaInfo, normalizeSearch } from '../../lib/utils';
 import { triggerBrowserDownload } from '../../lib/storage';
 import type { Order } from '../../types';
 import StatusBadge from '../../components/StatusBadge';
@@ -24,60 +23,128 @@ import ProductionOrderModal from '../../components/ProductionOrderModal';
 type SubView = 'waiting' | 'production' | 'alerts' | null;
 type MainTab = 'home' | 'allVideos' | 'finalized';
 
+/** Miniatura do Drive (funciona com arquivos compartilhados por link). */
+function driveThumbnailUrl(fileId: string, size = 400): string {
+  return `https://drive.google.com/thumbnail?id=${encodeURIComponent(fileId)}&sz=w${size}`;
+}
+
+/** Player oficial do Drive, para usar dentro de um iframe. */
+function drivePreviewUrl(fileId: string): string {
+  return `https://drive.google.com/file/d/${encodeURIComponent(fileId)}/preview`;
+}
+
+/** Extrai o ID do arquivo a partir de um link do Drive. */
 function extractFileId(url: string | undefined): string | null {
   if (!url) return null;
   const match = url.match(/\/file\/d\/([a-zA-Z0-9_-]+)/) || url.match(/id=([a-zA-Z0-9_-]+)/);
   return match ? match[1] : null;
 }
 
-/** Miniatura otimizada para carregar imagens instantaneamente via thumbnail público do Google Drive */
-function DriveMediaThumbnail({ url, isVideo }: { url: string; isVideo?: boolean }) {
+function Placeholder() {
+  return (
+    <div
+      style={{
+        width: '100%',
+        height: '100%',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        background: 'var(--bg-secondary)',
+      }}
+    >
+      <ImageIcon size={22} className="text-muted" />
+    </div>
+  );
+}
+
+/** Miniatura de imagem do Drive. Se não carregar, mostra o ícone de placeholder. */
+function DriveImage({ url, alt }: { url?: string; alt: string }) {
   const fileId = extractFileId(url);
+  const [failed, setFailed] = useState(false);
 
-  if (!fileId) {
+  if (!fileId || failed) return <Placeholder />;
+
+  return (
+    <img
+      src={driveThumbnailUrl(fileId, 800)}
+      alt={alt}
+      referrerPolicy="no-referrer"
+      loading="lazy"
+      onError={() => setFailed(true)}
+      style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+    />
+  );
+}
+
+/**
+ * Vídeo do Drive. Mostra a miniatura com botão de play.
+ * Só carrega o player oficial do Drive quando o usuário clica.
+ */
+function DriveVideo({ url }: { url?: string }) {
+  const fileId = extractFileId(url);
+  const [playing, setPlaying] = useState(false);
+  const [thumbFailed, setThumbFailed] = useState(false);
+
+  if (!fileId) return <Placeholder />;
+
+  if (playing) {
     return (
-      <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-secondary)' }}>
-        <ImageIcon size={22} className="text-muted" />
-      </div>
-    );
-  }
-
-  // URL direta de miniatura do Google Drive (rápida, leve e sem bloqueio de CORS na grelha)
-  const thumbUrl = `https://drive.google.com/thumbnail?id=${fileId}&sz=w800`;
-  const streamUrl = `https://drive.google.com/uc?export=download&id=${fileId}`;
-
-  if (isVideo) {
-    return (
-      <video
-        src={streamUrl}
-        style={{ width: '100%', height: '100%', objectFit: 'contain', background: '#000' }}
-        controls
-        preload="metadata"
+      <iframe
+        src={drivePreviewUrl(fileId)}
+        title="Vídeo do pedido"
+        allow="autoplay; fullscreen"
+        allowFullScreen
+        style={{ width: '100%', height: '100%', border: 0, background: '#000', display: 'block' }}
       />
     );
   }
 
   return (
-    <img
-      src={thumbUrl}
-      alt="Mascote"
-      style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-      onError={(e) => {
-        // Fallback caso a miniatura demore a indexar
-        e.currentTarget.src = `https://drive.google.com/uc?export=view&id=${fileId}`;
+    <button
+      type="button"
+      onClick={() => setPlaying(true)}
+      aria-label="Reproduzir vídeo"
+      style={{
+        position: 'relative',
+        width: '100%',
+        height: '100%',
+        border: 0,
+        padding: 0,
+        background: '#000',
+        cursor: 'pointer',
+        display: 'block',
       }}
-    />
+    >
+      {!thumbFailed && (
+        <img
+          src={driveThumbnailUrl(fileId, 800)}
+          alt=""
+          referrerPolicy="no-referrer"
+          onError={() => setThumbFailed(true)}
+          style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+        />
+      )}
+      <span
+        style={{
+          position: 'absolute',
+          inset: 0,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        <PlayCircle size={44} color="#fff" />
+      </span>
+    </button>
   );
 }
 
 function handleDownloadFromDrive(url: string, fileName: string) {
   const fileId = extractFileId(url);
-  if (fileId) {
-    const directUrl = `https://drive.google.com/uc?export=download&id=${fileId}`;
-    triggerBrowserDownload(directUrl, fileName);
-  } else {
-    triggerBrowserDownload(url, fileName);
-  }
+  const downloadUrl = fileId
+    ? `https://drive.google.com/uc?export=download&id=${fileId}`
+    : url;
+  triggerBrowserDownload(downloadUrl, fileName);
 }
 
 export default function CreatorArea() {
@@ -168,16 +235,22 @@ export default function CreatorArea() {
           >
             Início
           </button>
-          <button className={`navbar-tab ${mainTab === 'allVideos' ? 'active' : ''}`} onClick={() => setMainTab('allVideos')}>
+          <button
+            className={`navbar-tab ${mainTab === 'allVideos' ? 'active' : ''}`}
+            onClick={() => setMainTab('allVideos')}
+          >
             Todos os Vídeos
           </button>
-          <button className={`navbar-tab ${mainTab === 'finalized' ? 'active' : ''}`} onClick={() => setMainTab('finalized')}>
+          <button
+            className={`navbar-tab ${mainTab === 'finalized' ? 'active' : ''}`}
+            onClick={() => setMainTab('finalized')}
+          >
             Finalizados ({finalized.length})
           </button>
         </div>
       </div>
 
-      {mainTab === 'allVideos' && <AllVideosTab orders={orders} onOpenOrder={openOrderDetail} />}
+      {mainTab === 'allVideos' && <AllVideosTab orders={orders} />}
       {mainTab === 'finalized' && <FinalizedTab orders={finalized} onOpenOrder={openOrderDetail} />}
 
       {mainTab === 'home' && subView === null && (
@@ -207,19 +280,7 @@ export default function CreatorArea() {
                 <AlertTriangle size={18} />
                 <h3 style={{ margin: 0, color: 'var(--danger)' }}>Prioridade Máxima — Em Atraso ({overdue.length})</h3>
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '14px' }}>
-                {overdue.map(({ order, sla }) => (
-                  <div key={order.id} className="card" style={{ borderColor: 'var(--danger)', cursor: 'pointer', padding: 14 }} onClick={() => openOrderDetail(order)}>
-                    <div className="row space-between wrap gap-sm">
-                      <div>
-                        <span className="mono-number text-bold">#{order.orderNumber}</span> <strong>{order.clientName}</strong>
-                        <div className="text-sm text-muted" style={{ marginTop: 4 }}>{order.category} · {order.videoCount} vídeo(s)</div>
-                      </div>
-                      <span className="text-danger text-bold text-sm">{sla.label}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
+              <OverdueList items={overdue} onOpen={openOrderDetail} />
             </div>
           )}
 
@@ -298,19 +359,7 @@ export default function CreatorArea() {
           {overdue.length === 0 ? (
             <EmptyState text="Nenhum pedido em atraso. Tudo em dia! ✅" />
           ) : (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '14px' }}>
-              {overdue.map(({ order, sla }) => (
-                <div key={order.id} className="card" style={{ borderColor: 'var(--danger)', cursor: 'pointer', padding: 14 }} onClick={() => openOrderDetail(order)}>
-                  <div className="row space-between wrap gap-sm">
-                    <div>
-                      <span className="mono-number text-bold">#{order.orderNumber}</span> <strong>{order.clientName}</strong>
-                      <div className="text-sm text-muted" style={{ marginTop: 4 }}>{order.category} · {order.videoCount} vídeo(s)</div>
-                    </div>
-                    <span className="text-danger text-bold text-sm">{sla.label}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
+            <OverdueList items={overdue} onOpen={openOrderDetail} />
           )}
         </SubViewWrapper>
       )}
@@ -340,6 +389,38 @@ export default function CreatorArea() {
           }}
         />
       )}
+    </div>
+  );
+}
+
+function OverdueList({
+  items,
+  onOpen,
+}: {
+  items: { order: Order; sla: ReturnType<typeof getSlaInfo> }[];
+  onOpen: (o: Order) => void;
+}) {
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '14px' }}>
+      {items.map(({ order, sla }) => (
+        <div
+          key={order.id}
+          className="card"
+          style={{ borderColor: 'var(--danger)', cursor: 'pointer', padding: 14 }}
+          onClick={() => onOpen(order)}
+        >
+          <div className="row space-between wrap gap-sm">
+            <div>
+              <span className="mono-number text-bold">#{order.orderNumber}</span>{' '}
+              <strong>{order.clientName}</strong>
+              <div className="text-sm text-muted" style={{ marginTop: 4 }}>
+                {order.category} · {order.videoCount} vídeo(s)
+              </div>
+            </div>
+            <span className="text-danger text-bold text-sm">{sla.label}</span>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -380,10 +461,10 @@ function CompactCardsGrid({
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '14px' }}>
       {orders.map((order) => {
         const uploaded = order.videos.filter((v) => v.videoUrl).length;
-        const firstImg = order.images && order.images.length > 0 ? order.images[0].url : null;
+        const firstImg = order.images && order.images.length > 0 ? order.images[0].url : undefined;
         const firstScript = order.videos?.[0]?.script?.trim();
         const sla = !isFinalized ? getSlaInfo(new Date(order.createdAtISO)) : null;
-        const revisionNote = (order as any).revisionNote;
+        const revisionNote = order.revisionNote;
 
         return (
           <div
@@ -406,14 +487,17 @@ function CompactCardsGrid({
                 <StatusBadge status={order.status} />
               </div>
 
-              <div style={{ width: '100%', height: '120px', borderRadius: '8px', overflow: 'hidden', marginBottom: 10, background: 'var(--bg-secondary)' }}>
-                {firstImg ? (
-                  <DriveMediaThumbnail url={firstImg} />
-                ) : (
-                  <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <ImageIcon size={22} className="text-muted" />
-                  </div>
-                )}
+              <div
+                style={{
+                  width: '100%',
+                  height: '120px',
+                  borderRadius: '8px',
+                  overflow: 'hidden',
+                  marginBottom: 10,
+                  background: 'var(--bg-secondary)',
+                }}
+              >
+                <DriveImage url={firstImg} alt={`Mascote do pedido #${order.orderNumber}`} />
               </div>
 
               <strong style={{ fontSize: '1rem', display: 'block' }}>{order.clientName}</strong>
@@ -459,7 +543,10 @@ function CompactCardsGrid({
               )}
             </div>
 
-            <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid var(--border)' }} className="row space-between">
+            <div
+              style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid var(--border)' }}
+              className="row space-between"
+            >
               {isFinalized ? (
                 <span className="text-sm text-muted">Concluído em {formatDate(order.finishedAt || order.createdAtISO)}</span>
               ) : showVideoProgress ? (
@@ -471,6 +558,7 @@ function CompactCardsGrid({
               )}
               <button
                 className="btn btn-secondary btn-sm"
+                style={{ whiteSpace: 'nowrap' }}
                 onClick={(e) => {
                   e.stopPropagation();
                   onOpen(order);
@@ -487,13 +575,15 @@ function CompactCardsGrid({
   );
 }
 
-function AllVideosTab({ orders, onOpenOrder }: { orders: Order[]; onOpenOrder: (o: Order) => void }) {
+function AllVideosTab({ orders }: { orders: Order[] }) {
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('');
 
   const items = useMemo(() => {
     const flat: { order: Order; video: Order['videos'][number] }[] = [];
-    orders.forEach((o) => o.videos.filter((v) => v.videoUrl).forEach((v) => flat.push({ order: o, video: v })));
+    orders.forEach((o) =>
+      o.videos.filter((v) => v.videoUrl).forEach((v) => flat.push({ order: o, video: v }))
+    );
     const term = normalizeSearch(search);
     return flat
       .filter((x) => !term || normalizeSearch(x.order.clientName).includes(term) || x.order.orderNumber.includes(term))
@@ -506,7 +596,12 @@ function AllVideosTab({ orders, onOpenOrder }: { orders: Order[]; onOpenOrder: (
   return (
     <div className="stack gap-md">
       <div className="row gap-sm wrap">
-        <input className="input flex-1" placeholder="Buscar por Nº ou nome…" value={search} onChange={(e) => setSearch(e.target.value)} />
+        <input
+          className="input flex-1"
+          placeholder="Buscar por Nº ou nome…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
         <select className="select" style={{ maxWidth: 220 }} value={category} onChange={(e) => setCategory(e.target.value)}>
           <option value="">Todas as categorias</option>
           {categories.map((c) => (
@@ -514,20 +609,35 @@ function AllVideosTab({ orders, onOpenOrder }: { orders: Order[]; onOpenOrder: (
           ))}
         </select>
       </div>
+
       {items.length === 0 ? (
         <EmptyState text="Nenhum vídeo enviado ainda." />
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '16px' }}>
           {items.map(({ order, video }) => (
             <div key={`${order.id}-${video.index}`} className="card" style={{ padding: 12 }}>
-              <div style={{ width: '100%', height: '150px', borderRadius: 8, overflow: 'hidden', background: '#000', marginBottom: 10 }}>
-                <DriveMediaThumbnail url={video.videoUrl!} isVideo />
+              <div
+                style={{
+                  width: '100%',
+                  height: '150px',
+                  borderRadius: 8,
+                  overflow: 'hidden',
+                  background: '#000',
+                  marginBottom: 10,
+                }}
+              >
+                <DriveVideo url={video.videoUrl} />
               </div>
+
               <div className="text-sm text-bold">#{order.orderNumber} · {order.clientName}</div>
-              <div className="text-sm text-muted">Vídeo {video.index} de {order.videoCount} · {formatDate(video.uploadedAt)}</div>
-              <div className="row gap-xs" style={{ marginTop: 8 }}>
+              <div className="text-sm text-muted">
+                Vídeo {video.index} de {order.videoCount} · {formatDate(video.uploadedAt)}
+              </div>
+
+              <div className="row wrap" style={{ marginTop: 8, gap: 10, alignItems: 'center' }}>
                 <button
                   className="btn btn-ghost btn-sm"
+                  style={{ whiteSpace: 'nowrap' }}
                   onClick={() => handleDownloadFromDrive(video.videoUrl!, video.fileName || `video-${video.index}.mp4`)}
                 >
                   <Download size={13} /> Baixar
@@ -537,6 +647,7 @@ function AllVideosTab({ orders, onOpenOrder }: { orders: Order[]; onOpenOrder: (
                   target="_blank"
                   rel="noopener noreferrer"
                   className="btn btn-ghost btn-sm"
+                  style={{ whiteSpace: 'nowrap' }}
                   title="Abrir no Google Drive"
                 >
                   <ExternalLink size={13} /> Drive
@@ -565,8 +676,18 @@ function FinalizedTab({ orders, onOpenOrder }: { orders: Order[]; onOpenOrder: (
   return (
     <div className="stack gap-md">
       <div className="row gap-sm wrap">
-        <input className="input flex-1" placeholder="Buscar por Nº ou nome…" value={search} onChange={(e) => setSearch(e.target.value)} />
-        <select className="select" style={{ maxWidth: 200 }} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as any)}>
+        <input
+          className="input flex-1"
+          placeholder="Buscar por Nº ou nome…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+        <select
+          className="select"
+          style={{ maxWidth: 200 }}
+          value={statusFilter}
+          onChange={(e) => setStatusFilter(e.target.value as '' | 'ready' | 'delivered')}
+        >
           <option value="">Pronto e Entregue</option>
           <option value="ready">Só Prontos</option>
           <option value="delivered">Só Entregues</option>

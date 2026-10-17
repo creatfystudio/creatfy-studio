@@ -5,106 +5,78 @@ export interface ConversionResult {
   note?: string;
 }
 
-const ACCEPTED_EXTENSIONS = [
-  'jfif',
-  'jpg',
-  'jpeg',
-  'png',
-  'webp',
-  'heic',
-  'heif',
-  'bmp',
-  'gif',
-  'avif',
-  'svg',
-];
+// Formatos aceitos. HEIC/HEIF ficam de fora de propósito.
+const ACCEPTED_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/bmp', 'image/gif'];
+const ACCEPTED_EXTENSIONS = ['jfif', 'jpg', 'jpeg', 'png', 'webp', 'bmp', 'gif'];
 
 export function isAcceptedImageFile(file: File): boolean {
-  if (file.type && file.type.startsWith('image/')) return true;
+  // Se o navegador informou o tipo, ele decide.
+  if (file.type) return ACCEPTED_TYPES.includes(file.type);
+  // Se o tipo veio vazio, confere pela extensão.
   const ext = file.name.split('.').pop()?.toLowerCase() || '';
   return ACCEPTED_EXTENSIONS.includes(ext);
 }
 
+const MAX_SIDE = 2048;
+
 /**
- * Converte qualquer imagem gerada por IA ou enviada pelo vendedor para PNG nativo.
- * Redimensiona suavemente se a imagem for gigantesca (ex: 4K/8K) para largura máxima de 2048px,
- * mantendo a qualidade original do mascote 3D com custo zero de processamento e de tokens.
+ * Converte a imagem para PNG e reduz para no máximo 2048px no lado maior,
+ * mantendo a proporção. Se a imagem não puder ser lida, lança erro.
  */
 export async function convertImage(file: File): Promise<ConversionResult> {
   const baseName = file.name.replace(/\.[^/.]+$/, '');
   const targetFileName = `${baseName}.png`;
+  const objectUrl = URL.createObjectURL(file);
 
-  return new Promise((resolve, reject) => {
-    // 1. Tenta carregar nativamente no navegador
-    const img = new Image();
-    const objectUrl = URL.createObjectURL(file);
+  try {
+    const img = await loadImage(objectUrl);
 
-    img.onload = () => {
-      try {
-        const MAX_WIDTH = 2048;
-        const MAX_HEIGHT = 2048;
-        let width = img.width;
-        let height = img.height;
-
-        // Mantém a proporção exata da arte
-        if (width > MAX_WIDTH || height > MAX_HEIGHT) {
-          if (width > height) {
-            height = Math.round((height * MAX_WIDTH) / width);
-            width = MAX_WIDTH;
-          } else {
-            width = Math.round((width * MAX_HEIGHT) / height);
-            height = MAX_HEIGHT;
-          }
-        }
-
-        const canvas = document.createElement('canvas');
-        canvas.width = width;
-        canvas.height = height;
-
-        const ctx = canvas.getContext('2d');
-        if (!ctx) {
-          URL.revokeObjectURL(objectUrl);
-          throw new Error('Falha ao processar canvas da imagem.');
-        }
-
-        // Suavização de alta qualidade na renderização
-        ctx.imageSmoothingEnabled = true;
-        ctx.imageSmoothingQuality = 'high';
-        ctx.drawImage(img, 0, 0, width, height);
-
-        canvas.toBlob(
-          (blob) => {
-            URL.revokeObjectURL(objectUrl);
-            if (!blob) {
-              reject(new Error('Falha ao gerar PNG da imagem.'));
-              return;
-            }
-            resolve({
-              blob,
-              fileName: targetFileName,
-              mimeType: 'image/png',
-              note: file.type === 'image/png' ? 'PNG otimizado' : 'Convertido para PNG',
-            });
-          },
-          'image/png'
-        );
-      } catch (err: any) {
-        URL.revokeObjectURL(objectUrl);
-        reject(err);
+    let width = img.naturalWidth;
+    let height = img.naturalHeight;
+    if (width > MAX_SIDE || height > MAX_SIDE) {
+      if (width > height) {
+        height = Math.round((height * MAX_SIDE) / width);
+        width = MAX_SIDE;
+      } else {
+        width = Math.round((width * MAX_SIDE) / height);
+        height = MAX_SIDE;
       }
-    };
+    }
 
-    img.onerror = () => {
-      URL.revokeObjectURL(objectUrl);
-      // Fallback de segurança se o navegador não conseguir decodificar diretamente (ex: HEIC não nativo)
-      resolve({
-        blob: file,
-        fileName: targetFileName,
-        mimeType: 'image/png',
-        note: 'Salvo como PNG',
-      });
-    };
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
 
-    img.src = objectUrl;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('Não foi possível processar a imagem neste navegador.');
+
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(img, 0, 0, width, height);
+
+    const blob = await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob((b) => {
+        if (b) resolve(b);
+        else reject(new Error('Falha ao gerar a imagem convertida.'));
+      }, 'image/png');
+    });
+
+    return {
+      blob,
+      fileName: targetFileName,
+      mimeType: 'image/png',
+      note: file.type === 'image/png' ? 'PNG otimizado' : 'Convertido para PNG',
+    };
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
+function loadImage(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('Não foi possível abrir esta imagem. Tente outro arquivo.'));
+    img.src = src;
   });
 }

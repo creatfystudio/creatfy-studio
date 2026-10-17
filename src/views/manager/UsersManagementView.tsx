@@ -9,6 +9,7 @@ import { Modal, ConfirmDialog } from '../../components/Modal';
 import { MASTER_EMAIL, db } from '../../lib/firebase';
 import { doc, updateDoc } from 'firebase/firestore';
 import { connectGoogleDrive, isDriveConnected, disconnectGoogleDrive } from '../../lib/googleDrive';
+import { clearDriveFolderCache } from '../../lib/storage';
 
 export default function UsersManagementView() {
   const { profile } = useAuth();
@@ -45,20 +46,9 @@ export default function UsersManagementView() {
         const totalV = o.videos?.filter((v) => v.videoUrl)?.length || o.videoCount || 0;
         stats[finishedBy].doneVideos += totalV;
       }
-
-      // Vídeos pendentes ou em produção na fila geral
-      if (o.status === 'pending' || o.status === 'production') {
-        const remaining = o.videos?.filter((v) => !v.videoUrl)?.length || 0;
-        // Atribui à carga global de criadores
-        users.forEach((u) => {
-          if (u.level === 'creator') {
-            if (!stats[u.uid]) stats[u.uid] = { totalSold: 0, countSold: 0, doneVideos: 0, pendingVideos: 0 };
-          }
-        });
-      }
     });
 
-    // Conta pendentes totais divididos para criadores ou geral
+    // Total de vídeos ainda na fila (pendentes ou em produção)
     const totalPendingInQueue = orders
       .filter((o) => o.status === 'pending' || o.status === 'production')
       .reduce((acc, o) => acc + (o.videos?.filter((v) => !v.videoUrl)?.length || o.videoCount || 0), 0);
@@ -87,6 +77,8 @@ export default function UsersManagementView() {
     setConnectingDrive(true);
     try {
       await connectGoogleDrive();
+      // Limpa o cache de pastas para não reaproveitar IDs de uma conta anterior.
+      clearDriveFolderCache();
       setDriveConnected(true);
       setFeedback('Google Drive conectado com sucesso! Os uploads serão salvos nos seus 5 TB.');
     } catch (err: any) {
@@ -98,6 +90,7 @@ export default function UsersManagementView() {
 
   function handleDisconnectDrive() {
     disconnectGoogleDrive();
+    clearDriveFolderCache();
     setDriveConnected(false);
     setFeedback('Google Drive desligado.');
   }
@@ -168,7 +161,7 @@ export default function UsersManagementView() {
                       </span>
                     </td>
                     <td>
-                      <span className={`badge`} style={{ ['--c' as any]: u.active ? 'var(--status-ready)' : 'var(--status-delivered)' }}>
+                      <span className="badge" style={{ ['--c' as any]: u.active ? 'var(--status-ready)' : 'var(--status-delivered)' }}>
                         {u.active ? 'Ativo' : 'Inativo'}
                       </span>
                     </td>
@@ -296,7 +289,13 @@ function CreateUserModal({ onClose, currentUserName }: { onClose: () => void; cu
       </div>
       <div className="field">
         <label>Palavra-passe inicial</label>
-        <input className="input" type="text" value={password} onChange={(e) => setPassword(e.target.value)} />
+        <input
+          className="input"
+          type="password"
+          autoComplete="new-password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+        />
         <div className="field-hint">Mínimo de 6 caracteres.</div>
       </div>
       <div className="field">

@@ -8,6 +8,7 @@ import {
 } from 'firebase/auth';
 import { doc, onSnapshot, setDoc, serverTimestamp } from 'firebase/firestore';
 import { auth, db, MASTER_EMAIL } from '../lib/firebase';
+import { clearDriveFolderCache } from '../lib/storage';
 import type { AppUser } from '../types';
 
 interface AuthContextValue {
@@ -56,10 +57,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // Novo login: limpa qualquer aviso de "acesso não autorizado" anterior.
         setUnauthorized(false);
       } else {
-        // Importante: NÃO limpar "unauthorized" aqui. Quando detectamos um
-        // cadastro inativo/inexistente, nós mesmos deslogamos o usuário (ver
-        // efeito abaixo) — isso dispara este mesmo listener com user=null, e
-        // precisamos preservar a mensagem já definida para a tela de login.
+        // Qualquer saída (botão sair ou acesso negado) passa por aqui.
+        // NÃO limpamos "unauthorized": a mensagem precisa ficar na tela de login.
+        clearDriveFolderCache();
         setProfile(null);
         setLoading(false);
       }
